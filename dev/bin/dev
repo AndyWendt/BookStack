@@ -1,0 +1,70 @@
+#!/bin/bash
+
+show_usage() {
+    cat << EOF
+Usage: ./dev [command] [options]
+
+Commands:
+    help                            Show this help message
+    initial-setup                   Install application dependencies
+
+Examples:
+    ./dev help
+    ./dev initial-setup
+EOF
+}
+
+wait_for_db() {
+    echo "Waiting for database to be ready..."
+    for i in {1..30}; do
+        if docker compose exec db mysql -h"localhost" -u"bookstack-test" -p"bookstack-test" -e "SELECT 1 FROM DUAL;" bookstack-dev >/dev/null 2>&1 && \
+           docker compose exec db mysql -h"localhost" -u"bookstack-test" -p"bookstack-test" -e "SELECT 1 FROM DUAL;" bookstack-test >/dev/null 2>&1; then
+            echo "Both databases are ready!"
+            sleep 5
+            return 0
+        fi
+        echo "Waiting for databases to be ready... ($i/30)"
+        sleep 2
+    done
+    echo "Databases did not become ready in time"
+    return 1
+}
+
+initial_setup() {
+    echo "Installing application dependencies..."
+
+    echo "Copying .env"
+    cp .env.example .env
+
+    echo "Setting up permissions for docker access to ./storage"
+    sudo usermod -aG docker $USER
+    sudo chgrp -R docker storage
+
+    echo "Starting Docker"
+    docker compose up -d
+
+    # Wait for database to be ready before proceeding
+    if ! wait_for_db; then
+        echo "Failed to connect to database - please check your Docker setup"
+        exit 1
+    fi
+
+    echo "Migrating Database..."
+    docker compose run app php artisan migrate --database=mysql_testing
+
+    echo "Seeding Database"
+    docker compose run app php artisan db:seed --class=DummyContentSeeder --database=mysql_testing
+
+    echo "Setup completed"
+}
+
+
+# main command handler
+case "${1:-help}" in
+    help)
+        show_usage
+        ;;
+    initial-setup)
+        initial_setup
+        ;;
+esac
